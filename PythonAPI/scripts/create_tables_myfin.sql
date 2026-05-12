@@ -1,0 +1,119 @@
+-- =============================================================================
+-- Создание таблиц АИСПВИ в базе myfin (вручную в pgAdmin)
+-- Соответствует SQLAlchemy-моделям: app.models.bank.Bank, app.models.deposit.Deposit
+-- =============================================================================
+--
+-- Как выполнить:
+--   pgAdmin → Databases → myfin → ПКМ → Query Tool → вставить скрипт → Execute (F5).
+--
+-- Пересоздание «с нуля» (ВСЕ данные в этих таблицах будут удалены):
+--   раскомментируйте блок DROP ниже и выполните скрипт ещё раз.
+--
+-- =============================================================================
+
+-- DROP TABLE IF EXISTS deposits CASCADE;
+-- DROP TABLE IF EXISTS banks CASCADE;
+
+-- -----------------------------------------------------------------------------
+-- Таблица банков
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS banks (
+    id SERIAL NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    name VARCHAR(255) NOT NULL,
+    CONSTRAINT pk_banks PRIMARY KEY (id),
+    CONSTRAINT uq_banks_name UNIQUE (name)
+);
+
+COMMENT ON TABLE banks IS 'Банки — эмитенты вкладных продуктов';
+COMMENT ON COLUMN banks.id IS 'Уникальный идентификатор записи';
+COMMENT ON COLUMN banks.created_at IS 'Дата и время создания записи';
+COMMENT ON COLUMN banks.updated_at IS 'Дата и время последнего обновления записи';
+COMMENT ON COLUMN banks.name IS 'Наименование банка';
+
+-- -----------------------------------------------------------------------------
+-- Таблица вкладов
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS deposits (
+    id SERIAL NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    bank_id INTEGER NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    -- В ORM native_enum=False: значения перечислений хранятся строкой (как в SQLite)
+    currency VARCHAR(8) NOT NULL,
+    deposit_type VARCHAR(32) NOT NULL,
+    nominal_rate NUMERIC(6, 3) NOT NULL,
+    min_amount NUMERIC(14, 2) NOT NULL,
+    max_amount NUMERIC(14, 2),
+    term_months_min INTEGER NOT NULL,
+    term_months_max INTEGER NOT NULL,
+    capitalization BOOLEAN NOT NULL DEFAULT false,
+    replenishment BOOLEAN NOT NULL DEFAULT false,
+    early_withdrawal BOOLEAN NOT NULL DEFAULT false,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    external_source VARCHAR(32),
+    external_id VARCHAR(32),
+    CONSTRAINT pk_deposits PRIMARY KEY (id),
+    CONSTRAINT fk_deposits_bank_id FOREIGN KEY (bank_id) REFERENCES banks (id) ON DELETE CASCADE,
+    CONSTRAINT ck_deposits_currency CHECK (currency IN ('BYN', 'USD', 'EUR')),
+    CONSTRAINT ck_deposits_deposit_type CHECK (
+        deposit_type IN ('irrevocable', 'revocable', 'demand')
+    ),
+    CONSTRAINT ck_deposits_term_months CHECK (
+        term_months_min >= 0
+        AND term_months_max >= 0
+        AND term_months_max >= term_months_min
+    ),
+    CONSTRAINT ck_deposits_nominal_rate_nonnegative CHECK (nominal_rate >= 0)
+);
+
+COMMENT ON TABLE deposits IS 'Банковские вклады для каталога и сравнения';
+COMMENT ON COLUMN deposits.bank_id IS 'Банк-эмитент вклада';
+COMMENT ON COLUMN deposits.name IS 'Название вкладного продукта';
+COMMENT ON COLUMN deposits.currency IS 'Валюта вклада';
+COMMENT ON COLUMN deposits.deposit_type IS 'Тип вклада: irrevocable / revocable / demand';
+COMMENT ON COLUMN deposits.nominal_rate IS 'Номинальная ставка, % годовых';
+COMMENT ON COLUMN deposits.min_amount IS 'Минимальная сумма размещения';
+COMMENT ON COLUMN deposits.max_amount IS 'Максимальная сумма (NULL — без ограничения)';
+COMMENT ON COLUMN deposits.term_months_min IS 'Минимальный срок в месяцах';
+COMMENT ON COLUMN deposits.term_months_max IS 'Максимальный срок в месяцах';
+COMMENT ON COLUMN deposits.capitalization IS 'Начисление процентов с капитализацией';
+COMMENT ON COLUMN deposits.replenishment IS 'Допускается пополнение';
+COMMENT ON COLUMN deposits.early_withdrawal IS 'Досрочное расторжение / частичное снятие';
+COMMENT ON COLUMN deposits.is_active IS 'Продукт доступен в каталоге';
+COMMENT ON COLUMN deposits.external_source IS 'Источник: belarusbank_api и т.п.; NULL — не из автосинхронизации';
+COMMENT ON COLUMN deposits.external_id IS 'Внешний идентификатор продукта (например vklad_id)';
+
+-- Индексы (как в моделях: index=True на bank_id и is_active)
+CREATE INDEX IF NOT EXISTS ix_deposits_bank_id ON deposits (bank_id);
+CREATE INDEX IF NOT EXISTS ix_deposits_is_active ON deposits (is_active);
+CREATE INDEX IF NOT EXISTS ix_deposits_external_source ON deposits (external_source);
+CREATE INDEX IF NOT EXISTS ix_deposits_external_id ON deposits (external_id);
+
+-- -----------------------------------------------------------------------------
+-- Автообновление updated_at при UPDATE (в ORM это делает SQLAlchemy; в pgAdmin —
+-- при ручном UPDATE триггер сохранит то же поведение на уровне БД)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.trg_touch_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_banks_touch_updated_at ON banks;
+CREATE TRIGGER trg_banks_touch_updated_at
+    BEFORE UPDATE ON banks
+    FOR EACH ROW
+    EXECUTE FUNCTION public.trg_touch_updated_at();
+
+DROP TRIGGER IF EXISTS trg_deposits_touch_updated_at ON deposits;
+CREATE TRIGGER trg_deposits_touch_updated_at
+    BEFORE UPDATE ON deposits
+    FOR EACH ROW
+    EXECUTE FUNCTION public.trg_touch_updated_at();

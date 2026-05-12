@@ -1,0 +1,31 @@
+# Python
+PythonAPI/.venv/
+PythonAPI/__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Env / secrets
+.env
+.env.local
+*.db
+
+# Node / frontend
+front/node_modules/
+front/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
